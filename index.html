@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jeu de Plateforme Amélioré</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            background: #87CEEB; /* Ciel bleu */
+        }
+        #startScreen, #gameOverScreen, #pauseScreen {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 2em;
+            display: none;
+        }
+        #startScreen, #gameOverScreen, #pauseScreen {
+            font-family: 'Arial', sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div id="startScreen">Appuyez sur Entrée pour commencer</div>
+    <div id="gameOverScreen">Game Over! Appuyez sur Entrée pour recommencer</div>
+    <div id="pauseScreen">Pause! Appuyez sur Entrée pour reprendre</div>
+    <canvas id="gameCanvas"></canvas>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        const player = {
+            x: 50,
+            y: canvas.height - 150,
+            width: 50,
+            height: 50,
+            speed: 5,
+            velocityY: 0,
+            jumping: false,
+            grounded: true,
+            lives: 5, // Augmenté à 5 vies
+            score: 0,
+            powerUp: false,
+            powerUpTimer: 0,
+            invincible: false,
+            invincibleTimer: 0,
+            invincibleTimerMax: 100, // Durée de l'invincibilité
+            blinkTimer: 0, // Timer pour le clignotement
+            blinkInterval: 10, // Intervalle de clignotement
+            isBlinking: false, // État du clignotement
+            knockback: 0 // Effet de recul
+        };
+
+        const gravity = 0.5;
+        const jumpStrength = 10;
+        const platforms = [];
+        const enemies = [];
+        let backgroundOffset = 0;
+        let level = 1;
+        let gameState = 'start';
+        let particles = [];
+        let sounds = {
+            jump: new Audio('jump.mp3'),
+            enemyDeath: new Audio('enemyDeath.mp3'),
+            gameOver: new Audio('gameOver.mp3'),
+            backgroundMusic: new Audio('backgroundMusic.mp3'),
+            playerHit: new Audio('playerHit.mp3') // Son de perte de vie
+        };
+
+        let lifeLostTimer = 0; // Timer pour gérer le délai avant de perdre une vie
+
+        // Événements clavier
+        const keys = {
+            right: false,
+            left: false,
+            jump: false,
+            pause: false
+        };
+
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'ArrowRight') keys.right = true;
+            if (e.code === 'ArrowLeft') keys.left = true;
+            if (e.code === 'Space') keys.jump = true;
+            if (e.code === 'Enter') handleEnterPress();
+            if (e.code === 'Escape') handlePause();
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (e.code === 'ArrowRight') keys.right = false;
+            if (e.code === 'ArrowLeft') keys.left = false;
+            if (e.code === 'Space') keys.jump = false;
+        });
+
+        function handleEnterPress() {
+            if (gameState === 'start' || gameState === 'gameOver') {
+                gameState = 'playing';
+                document.getElementById('startScreen').style.display = 'none';
+                document.getElementById('gameOverScreen').style.display = 'none';
+                document.getElementById('pauseScreen').style.display = 'none';
+                resetGame();
+            } else if (gameState === 'paused') {
+                gameState = 'playing';
+                document.getElementById('pauseScreen').style.display = 'none';
+                sounds.backgroundMusic.play();
+                update();
+            }
+        }
+
+        function handlePause() {
+            if (gameState === 'playing') {
+                gameState = 'paused';
+                document.getElementById('pauseScreen').style.display = 'flex';
+                sounds.backgroundMusic.pause();
+            }
+        }
+
+        function resetGame() {
+            player.x = 50;
+            player.y = canvas.height - 150;
+            player.velocityY = 0;
+            player.lives = 5; // Réinitialiser les vies à 5
+            player.score = 0;
+            player.invincible = false;
+            player.invincibleTimer = 0;
+            player.blinkTimer = 0; // Réinitialiser le timer de clignotement
+            player.isBlinking = false; // Réinitialiser l'état de clignotement
+            player.knockback = 0; // Réinitialiser l'effet de recul
+            lifeLostTimer = 0; // Réinitialiser le timer de perte de vie
+            platforms.length = 0;
+            enemies.length = 0;
+            particles.length = 0;
+            backgroundOffset = 0;
+            generatePlatforms();
+            generateEnemies();
+            sounds.backgroundMusic.loop = true;
+            sounds.backgroundMusic.play();
+            update();
+        }
+
+        function generatePlatforms() {
+            for (let i = 0; i < 10; i++) {
+                platforms.push({
+                    x: Math.random() * canvas.width,
+                    y: canvas.height - (i + 1) * 100,
+                    width: 100 + Math.random() * 200,
+                    height: 20,
+                    isMoving: Math.random() < 0.3,
+                    direction: Math.random() < 0.5 ? 1 : -1,
+                    speed: Math.random() * 2 + 1
+                });
+            }
+        }
+
+        function generateEnemies() {
+            for (let i = 0; i < 5; i++) {
+                enemies.push({
+                    x: Math.random() * canvas.width,
+                    y: canvas.height - 100,
+                    width: 50,
+                    height: 50,
+                    speed: 2,
+                    direction: Math.random() < 0.5 ? 1 : -1,
+                    velocityY: 0,
+                    isFlying: Math.random() < 0.3
+                });
+            }
+        }
+
+        function generateParticles(x, y) {
+            for (let i = 0; i < 20; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    size: Math.random() * 5 + 1,
+                    speedX: Math.random() * 2 - 1,
+                    speedY: Math.random() * 2 - 1,
+                    life: Math.random() * 20 + 10
+                });
+            }
+        }
+
+        function checkPlatformCollision() {
+            player.grounded = false;
+            platforms.forEach(platform => {
+                if (player.x < platform.x + platform.width &&
+                    player.x + player.width > platform.x &&
+                    player.y + player.height > platform.y &&
+                    player.y + player.height - player.velocityY <= platform.y) {
+                    player.y = platform.y - player.height;
+                    player.velocityY = 0;
+                    player.grounded = true;
+                    player.jumping = false;
+                }
+            });
+        }
+
+        function updateParticles() {
+            particles.forEach(particle => {
+                particle.x += particle.speedX;
+                particle.y += particle.speedY;
+                particle.life--;
+            });
+            particles = particles.filter(particle => particle.life > 0);
+        }
+
+        function handleEnemyDeath(index) {
+            player.score += 100;
+            enemies.splice(index, 1);
+            sounds.enemyDeath.play();
+            if (enemies.length === 0) {
+                level++;
+                player.powerUp = true;
+                player.powerUpTimer = 200;
+                generateEnemies();
+            }
+        }
+
+        function handlePlayerCollision() {
+            if (player.invincible) return; // Ignore collisions while invincible
+
+            // Délai avant de perdre une vie
+            if (lifeLostTimer <= 0) {
+                player.lives -= 1;
+                sounds.playerHit.play(); // Jouer le son de perte de vie
+                if (player.lives <= 0) {
+                    gameState = 'gameOver';
+                    document.getElementById('gameOverScreen').style.display = 'flex';
+                    sounds.backgroundMusic.pause();
+                    sounds.gameOver.play();
+                    return;
+                }
+
+                // Réinitialiser le joueur avec clignotement et recul
+                player.isBlinking = true;
+                player.blinkTimer = 30; // Temps de clignotement
+                player.invincible = true;
+                player.invincibleTimer = player.invincibleTimerMax; // Temps d'invincibilité
+                player.knockback = player.speed * (keys.right ? -1 : 1); // Recul dans la direction opposée
+                lifeLostTimer = 60; // Attendre 1 seconde avant de pouvoir perdre une autre vie
+                player.x = canvas.width / 2; // Réinitialiser la position du joueur
+                player.y = canvas.height / 2; // Réinitialiser la position du joueur
+            }
+        }
+
+        function updatePlayerBlinking() {
+            if (player.isBlinking) {
+                player.blinkTimer--;
+                if (player.blinkTimer <= 0) {
+                    player.isBlinking = false; // Arrêter le clignotement
+                }
+            }
+        }
+
+        function drawPlayer() {
+            if (player.isBlinking) {
+                if (Math.floor(player.blinkTimer / player.blinkInterval) % 2 === 0) {
+                    ctx.fillStyle = 'red';
+                    ctx.fillRect(player.x - backgroundOffset, player.y, player.width, player.height);
+                }
+            } else {
+                ctx.fillStyle = 'red';
+                ctx.fillRect(player.x - backgroundOffset, player.y, player.width, player.height);
+            }
+        }
+
+        function update() {
+            if (gameState !== 'playing') return;
+
+            // Bloquer les touches pendant la réapparition
+            if (player.isBlinking) {
+                keys.right = keys.left = keys.jump = false;
+            }
+
+            // Déplacement du joueur
+            if (keys.right && !player.isBlinking) player.x += player.speed;
+            if (keys.left && !player.isBlinking) player.x -= player.speed;
+
+            // Saut
+            if (keys.jump && player.grounded && !player.isBlinking) {
+                player.velocityY = -jumpStrength;
+                player.jumping = true;
+                player.grounded = false;
+                sounds.jump.play();
+            }
+
+            // Appliquer la gravité au joueur
+            player.velocityY += gravity;
+            player.y += player.velocityY;
+
+            // Vérifier les collisions avec les plateformes
+            checkPlatformCollision();
+
+            // Vérifier si le joueur est sur le sol
+            if (player.y + player.height > canvas.height) {
+                player.y = canvas.height - player.height;
+                player.velocityY = 0;
+                player.jumping = false;
+                player.grounded = true;
+            }
+
+            // Déplacement et gravité des ennemis
+            enemies.forEach((enemy, index) => {
+                if (enemy.isFlying) {
+                    enemy.y += Math.sin(Date.now() / 1000) * enemy.speed;
+                } else {
+                    enemy.x += enemy.speed * enemy.direction;
+                    enemy.velocityY += gravity;
+                    enemy.y += enemy.velocityY;
+                }
+
+                if (enemy.y + enemy.height > canvas.height) {
+                    enemy.y = canvas.height - enemy.height;
+                    enemy.velocityY = 0;
+                }
+
+                if (enemy.x < 0 || enemy.x + enemy.width > canvas.width) {
+                    enemy.direction *= -1;
+                }
+
+                if (
+                    player.x < enemy.x + enemy.width &&
+                    player.x + player.width > enemy.x &&
+                    player.y < enemy.y + enemy.height &&
+                    player.y + player.height > enemy.y
+                ) {
+                    if (player.velocityY > 0 && player.y + player.height - player.velocityY <= enemy.y) {
+                        player.velocityY = 0;
+                        player.jumping = false;
+                        player.grounded = true;
+                        handleEnemyDeath(index);
+                        generateParticles(enemy.x, enemy.y);
+                    } else {
+                        handlePlayerCollision();
+                    }
+                }
+            });
+
+            // Mise à jour des particles
+            updateParticles();
+
+            // Mise à jour des plateformes mobiles
+            platforms.forEach(platform => {
+                if (platform.isMoving) {
+                    platform.x += platform.speed * platform.direction;
+                    if (platform.x < 0 || platform.x + platform.width > canvas.width) {
+                        platform.direction *= -1;
+                    }
+                }
+            });
+
+            // Mise à jour du fond défilant
+            backgroundOffset += 1;
+            if (backgroundOffset >= canvas.width) {
+                backgroundOffset = 0;
+            }
+
+            // Dessin du fond
+            ctx.fillStyle = '#87CEEB';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Dessin des plateformes
+            ctx.fillStyle = 'gray';
+            platforms.forEach(platform => {
+                ctx.fillRect(platform.x - backgroundOffset, platform.y, platform.width, platform.height);
+            });
+
+            // Dessin des particules
+            ctx.fillStyle = 'orange';
+            particles.forEach(particle => {
+                ctx.beginPath();
+                ctx.arc(particle.x - backgroundOffset, particle.y, particle.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Dessin des ennemis
+            ctx.fillStyle = 'green';
+            enemies.forEach(enemy => {
+                ctx.fillRect(enemy.x - backgroundOffset, enemy.y, enemy.width, enemy.height);
+            });
+
+            // Dessin du joueur avec clignotement
+            updatePlayerBlinking();
+            drawPlayer();
+
+            // Affichage du score et des vies
+            ctx.fillStyle = 'black';
+            ctx.font = '24px Arial, sans-serif'; // Utilisation de la police sans-serif
+            ctx.fillText('Score: ' + player.score, 10, 30);
+            ctx.fillText('Lives: ' + player.lives, 10, 60);
+            ctx.fillText('Level: ' + level, 10, 90);
+
+            // Gestion de l'invincibilité du joueur
+            if (player.invincible) {
+                player.invincibleTimer--;
+                if (player.invincibleTimer <= 0) {
+                    player.invincible = false;
+                }
+            }
+
+            // Gestion du délai avant de retirer une vie
+            if (lifeLostTimer > 0) {
+                lifeLostTimer--;
+            }
+
+            requestAnimationFrame(update);
+        }
+
+        document.getElementById('startScreen').style.display = 'flex';
+    </script>
+</body>
+</html>
